@@ -285,6 +285,11 @@ LOG_FILE=/opt/tke-dify-sync/logs/tke_sync.log
 # === TKE 文档配置 ===
 BASE_URL=https://cloud.tencent.com
 START_URL=https://cloud.tencent.com/document/product/457
+
+# === 内容格式配置 ===
+# 内容格式配置
+# 注意：现在默认使用 Markdown 格式提取，保持文档结构和格式
+# 支持标题、列表、链接、代码块等，无需配置项
 EOF
 
     # 复制为实际配置文件
@@ -332,16 +337,14 @@ SERVICE_NAME="tke-dify-sync"
 LOG_FILE="/opt/tke-dify-sync/logs/monitor.log"
 PID_FILE="/opt/tke-dify-sync/data/tke_sync.pid"
 
-# 检查服务状态
-check_service() {
-    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
-        echo "$(date): ✅ 服务运行正常" >> $LOG_FILE
-        return 0
-    elif pgrep -f "python.*tke_dify_sync.py" > /dev/null; then
-        echo "$(date): ✅ 进程运行正常" >> $LOG_FILE
+# 检查 cron 作业状态（不检查 systemd 服务）
+check_cron_status() {
+    # 检查 cron 作业是否配置
+    if crontab -l 2>/dev/null | grep -q "tke_dify_sync"; then
+        echo "$(date): ✅ cron 作业已配置" >> $LOG_FILE
         return 0
     else
-        echo "$(date): ❌ 服务已停止" >> $LOG_FILE
+        echo "$(date): ⚠️ cron 作业未配置" >> $LOG_FILE
         return 1
     fi
 }
@@ -378,38 +381,9 @@ EOF
     log_success "管理脚本创建完成"
 }
 
-# 创建系统服务
-create_systemd_service() {
-    log_info "创建系统服务..."
-    
-    sudo tee /etc/systemd/system/tke-dify-sync.service > /dev/null << EOF
-[Unit]
-Description=TKE Dify Sync Service
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$INSTALL_DIR
-Environment=PATH=$INSTALL_DIR/venv/bin
-ExecStart=$INSTALL_DIR/venv/bin/python tke_dify_sync.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 重新加载 systemd
-    sudo systemctl daemon-reload
-    
-    # 启用服务
-    sudo systemctl enable tke-dify-sync
-    
-    log_success "系统服务创建完成"
-}
+# 注意：已删除 create_systemd_service() 函数
+# 原因：systemd 服务会导致脚本无限重启，与 cron 调度冲突
+# 现在只使用 cron 作业进行定时同步
 
 # 设置文件权限
 set_permissions() {
@@ -430,90 +404,481 @@ set_permissions() {
     log_success "文件权限设置完成"
 }
 
+# 生成 cron 作业模板
+generate_cron_templates() {
+    local template_dir="$INSTALL_DIR/config/cron_templates"
+    mkdir -p "$template_dir"
+    
+    log_info "生成 cron 作业模板..."
+    
+    # 单知识库模板
+    cat > "$template_dir/single_kb.cron" << EOF
+# TKE 文档同步系统 - 单知识库配置
+# 每天凌晨2点执行同步
+0 2 * * * cd $INSTALL_DIR && $INSTALL_DIR/venv/bin/python tke_dify_sync.py >> $INSTALL_DIR/logs/cron.log 2>&1
+
+# 监控任务（每5分钟检查一次）
+*/5 * * * * $INSTALL_DIR/scripts/monitor.sh >/dev/null 2>&1
+
+# 日志清理（每周日凌晨1点）
+0 1 * * 0 find $INSTALL_DIR/logs -name '*.log' -mtime +7 -delete 2>/dev/null || true
+EOF
+
+    # 多知识库模板
+    cat > "$template_dir/multi_kb.cron" << EOF
+# TKE 文档同步系统 - 多知识库配置
+# tke_docs_base 知识库（凌晨2点）
+0 2 * * * cd $INSTALL_DIR && cp .env.tke_docs_base .env && $INSTALL_DIR/venv/bin/python tke_dify_sync.py >> $INSTALL_DIR/logs/cron_tke_docs_base.log 2>&1
+
+# tke_knowledge_base 知识库（凌晨3点）
+0 3 * * * cd $INSTALL_DIR && cp .env.tke_knowledge_base .env && $INSTALL_DIR/venv/bin/python tke_dify_sync.py >> $INSTALL_DIR/logs/cron_tke_knowledge_base.log 2>&1
+
+# 监控任务（每5分钟检查一次）
+*/5 * * * * $INSTALL_DIR/scripts/monitor.sh >/dev/null 2>&1
+
+# 日志清理（每周日凌晨1点）
+0 1 * * 0 find $INSTALL_DIR/logs -name '*.log' -mtime +7 -delete 2>/dev/null || true
+EOF
+
+    # 高频同步模板（每6小时）
+    cat > "$template_dir/frequent_sync.cron" << EOF
+# TKE 文档同步系统 - 高频同步配置
+# 每6小时执行一次同步
+0 */6 * * * cd $INSTALL_DIR && $INSTALL_DIR/venv/bin/python tke_dify_sync.py >> $INSTALL_DIR/logs/cron.log 2>&1
+
+# 监控任务（每5分钟检查一次）
+*/5 * * * * $INSTALL_DIR/scripts/monitor.sh >/dev/null 2>&1
+
+# 日志清理（每周日凌晨1点）
+0 1 * * 0 find $INSTALL_DIR/logs -name '*.log' -mtime +7 -delete 2>/dev/null || true
+EOF
+
+    log_success "cron 模板已生成到: $template_dir"
+}
+
 # 配置定时任务
 setup_cron_jobs() {
     log_info "配置定时任务..."
     
     # 创建临时 crontab 文件
-    TEMP_CRON=$(mktemp)
+    local temp_cron=$(mktemp)
     
     # 获取现有的 crontab（如果有）
-    crontab -l 2>/dev/null > $TEMP_CRON || true
+    if ! crontab -l 2>/dev/null > "$temp_cron"; then
+        log_info "当前用户没有 crontab，创建新的"
+        touch "$temp_cron"
+    else
+        log_info "保留现有的 crontab 条目"
+    fi
+    
+    # 检查是否已存在相关的 cron 作业，避免重复添加
+    if grep -q "tke_dify_sync\|tke-dify" "$temp_cron" 2>/dev/null; then
+        log_warning "发现现有的 TKE 同步 cron 作业，将替换"
+        # 删除现有的 TKE 相关作业
+        grep -v "tke_dify_sync\|tke-dify" "$temp_cron" > "${temp_cron}.tmp" || touch "${temp_cron}.tmp"
+        mv "${temp_cron}.tmp" "$temp_cron"
+    fi
+    
+    # 添加注释说明
+    echo "" >> "$temp_cron"
+    echo "# TKE 文档同步系统 - 自动生成于 $(date)" >> "$temp_cron"
     
     # 添加监控任务（每5分钟检查一次）
-    echo "*/5 * * * * $INSTALL_DIR/scripts/monitor.sh" >> $TEMP_CRON
+    echo "*/5 * * * * $INSTALL_DIR/scripts/monitor.sh >/dev/null 2>&1" >> "$temp_cron"
     
-    # 添加定时同步任务（每天凌晨2点执行）
-    echo "0 2 * * * cd $INSTALL_DIR && $INSTALL_DIR/venv/bin/python tke_dify_sync.py >> $INSTALL_DIR/logs/cron.log 2>&1" >> $TEMP_CRON
+    # 检查是否存在多知识库配置文件
+    local multi_kb_configs=()
+    if [ -f "$INSTALL_DIR/.env.tke_docs_base" ]; then
+        multi_kb_configs+=("tke_docs_base")
+    fi
+    if [ -f "$INSTALL_DIR/.env.tke_knowledge_base" ]; then
+        multi_kb_configs+=("tke_knowledge_base")
+    fi
+    
+    if [ ${#multi_kb_configs[@]} -gt 0 ]; then
+        log_info "检测到多知识库配置，设置分别的 cron 作业"
+        
+        local hour=2
+        for config in "${multi_kb_configs[@]}"; do
+            log_info "配置 $config 知识库同步任务（凌晨 ${hour} 点）"
+            # 增强的日志记录：包含时间戳、执行状态和错误处理
+            cat >> "$temp_cron" << EOF
+0 $hour * * * cd $INSTALL_DIR && { echo "\$(date '+\%Y-\%m-\%d \%H:\%M:\%S') [START] 开始同步 $config 知识库"; cp .env.$config .env && $INSTALL_DIR/venv/bin/python tke_dify_sync.py && echo "\$(date '+\%Y-\%m-\%d \%H:\%M:\%S') [SUCCESS] $config 知识库同步完成" || echo "\$(date '+\%Y-\%m-\%d \%H:\%M:\%S') [ERROR] $config 知识库同步失败"; } >> $INSTALL_DIR/logs/cron_$config.log 2>&1
+EOF
+            ((hour++))
+        done
+    else
+        log_info "使用单知识库配置"
+        # 增强的日志记录：包含时间戳、执行状态和错误处理
+        cat >> "$temp_cron" << 'EOF'
+0 2 * * * cd $INSTALL_DIR && { echo "$(date '+%Y-%m-%d %H:%M:%S') [START] 开始 TKE 文档同步"; $INSTALL_DIR/venv/bin/python tke_dify_sync.py && echo "$(date '+%Y-%m-%d %H:%M:%S') [SUCCESS] TKE 文档同步完成" || echo "$(date '+%Y-%m-%d %H:%M:%S') [ERROR] TKE 文档同步失败"; } >> $INSTALL_DIR/logs/cron.log 2>&1
+EOF
+    fi
+    
+    # 添加日志清理任务（每周日凌晨1点）
+    echo "0 1 * * 0 find $INSTALL_DIR/logs -name '*.log' -mtime +7 -delete 2>/dev/null || true" >> "$temp_cron"
+    
+    # 验证 crontab 格式
+    if ! crontab -T "$temp_cron" 2>/dev/null; then
+        log_error "crontab 格式验证失败"
+        rm "$temp_cron"
+        return 1
+    fi
     
     # 安装新的 crontab
-    crontab $TEMP_CRON
+    if crontab "$temp_cron"; then
+        log_success "crontab 安装成功"
+    else
+        log_error "crontab 安装失败"
+        rm "$temp_cron"
+        return 1
+    fi
     
     # 清理临时文件
-    rm $TEMP_CRON
+    rm "$temp_cron"
+    
+    # 显示配置的 cron 作业
+    log_info "已配置的 cron 作业："
+    crontab -l | grep -E "(tke_dify_sync|monitor\.sh|find.*logs)" | while read -r job; do
+        echo "  📋 $job"
+    done
     
     log_success "定时任务配置完成"
+}
+
+# 设置增强的日志记录系统
+setup_enhanced_logging() {
+    log_info "设置增强的日志记录系统..."
+    
+    # 创建日志目录结构
+    local log_dirs=(
+        "$INSTALL_DIR/logs"
+        "$INSTALL_DIR/logs/archive"
+    )
+    
+    for dir in "${log_dirs[@]}"; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            log_success "创建日志目录: $(basename "$dir")"
+        fi
+    done
+    
+    # 创建系统日志文件
+    local system_log="$INSTALL_DIR/logs/system.log"
+    if [ ! -f "$system_log" ]; then
+        touch "$system_log"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [INIT] TKE 文档同步系统日志初始化" >> "$system_log"
+        log_success "创建系统日志文件"
+    fi
+    
+    # 创建错误日志文件
+    local error_log="$INSTALL_DIR/logs/error.log"
+    if [ ! -f "$error_log" ]; then
+        touch "$error_log"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [INIT] 错误日志初始化" >> "$error_log"
+        log_success "创建错误日志文件"
+    fi
+    
+    # 设置 logrotate 配置
+    log_info "配置日志轮转..."
+    if [ -f "$INSTALL_DIR/scripts/setup_logrotate.sh" ]; then
+        if bash "$INSTALL_DIR/scripts/setup_logrotate.sh" --force >/dev/null 2>&1; then
+            log_success "logrotate 配置已安装"
+        else
+            log_warning "logrotate 配置失败，将使用 cron 清理"
+        fi
+    else
+        log_warning "logrotate 脚本不存在，将使用 cron 清理"
+    fi
+    
+    # 设置日志清理 cron 作业
+    log_info "配置日志清理任务..."
+    if [ -f "$INSTALL_DIR/scripts/setup_log_cleanup_cron.sh" ]; then
+        if bash "$INSTALL_DIR/scripts/setup_log_cleanup_cron.sh" --force >/dev/null 2>&1; then
+            log_success "日志清理 cron 作业已配置"
+        else
+            log_warning "日志清理配置失败，请手动运行: ./scripts/setup_log_cleanup_cron.sh"
+        fi
+    else
+        log_warning "日志清理脚本不存在，将使用简单清理"
+    fi
+    
+    # 添加日志分析工具到 cron（可选）
+    log_info "配置日志分析任务..."
+    local temp_cron=$(mktemp)
+    
+    # 获取现有 crontab
+    crontab -l 2>/dev/null > "$temp_cron" || touch "$temp_cron"
+    
+    # 检查是否已存在日志分析任务
+    if ! grep -q "log_analyzer.sh" "$temp_cron"; then
+        # 添加每日日志分析任务（早上8点）
+        echo "0 8 * * * $INSTALL_DIR/scripts/log_analyzer.sh -s >> $INSTALL_DIR/logs/daily_analysis.log 2>&1" >> "$temp_cron"
+        
+        # 添加每周详细分析任务（周一早上9点）
+        echo "0 9 * * 1 $INSTALL_DIR/scripts/log_analyzer.sh -r >> $INSTALL_DIR/logs/weekly_analysis.log 2>&1" >> "$temp_cron"
+        
+        # 安装更新的 crontab
+        if crontab "$temp_cron"; then
+            log_success "日志分析任务已添加到 crontab"
+        else
+            log_warning "添加日志分析任务失败"
+        fi
+    else
+        log_info "日志分析任务已存在"
+    fi
+    
+    rm "$temp_cron"
+    
+    log_success "增强日志记录系统配置完成"
+}
+
+# 验证 cron 作业配置
+validate_cron_configuration() {
+    log_info "验证 cron 作业配置..."
+    
+    local errors=0
+    
+    # 检查 crontab 是否存在
+    if ! crontab -l >/dev/null 2>&1; then
+        log_error "crontab 不存在"
+        ((errors++))
+        return $errors
+    fi
+    
+    # 检查 TKE 相关的 cron 作业
+    local tke_jobs=$(crontab -l | grep -E "(tke_dify_sync|monitor\.sh)" || true)
+    if [ -z "$tke_jobs" ]; then
+        log_error "未找到 TKE 相关的 cron 作业"
+        ((errors++))
+    else
+        log_success "找到 TKE 相关的 cron 作业"
+        echo "$tke_jobs" | while read -r job; do
+            echo "  ✅ $job"
+        done
+    fi
+    
+    # 检查日志目录是否存在
+    if [ ! -d "$INSTALL_DIR/logs" ]; then
+        log_error "日志目录不存在: $INSTALL_DIR/logs"
+        ((errors++))
+    else
+        log_success "日志目录存在"
+    fi
+    
+    # 检查 Python 虚拟环境
+    if [ ! -f "$INSTALL_DIR/venv/bin/python" ]; then
+        log_error "Python 虚拟环境不存在"
+        ((errors++))
+    else
+        log_success "Python 虚拟环境存在"
+    fi
+    
+    return $errors
 }
 
 # 验证安装
 verify_installation() {
     log_info "验证安装..."
     
+    local verification_issues=0
+    
     # 检查 Python 环境
     cd $INSTALL_DIR
-    source venv/bin/activate
+    if source venv/bin/activate 2>/dev/null; then
+        log_success "Python 虚拟环境正常"
+    else
+        log_error "Python 虚拟环境异常"
+        ((verification_issues++))
+    fi
     
     # 检查依赖包
-    python -c "import requests, selenium, bs4; print('✅ Python 依赖包正常')"
+    if python -c "import requests, selenium, bs4; print('✅ Python 依赖包正常')" 2>/dev/null; then
+        log_success "Python 依赖包正常"
+    else
+        log_error "Python 依赖包缺失或异常"
+        ((verification_issues++))
+    fi
     
     # 检查 Chrome
-    google-chrome --version
+    if google-chrome --version >/dev/null 2>&1; then
+        log_success "Chrome 浏览器正常"
+    else
+        log_warning "Chrome 浏览器检查失败（可能影响某些功能）"
+    fi
     
     # 检查配置文件
     if [ -f "$INSTALL_DIR/.env" ]; then
-        log_success "配置文件存在"
+        log_success "主配置文件存在"
+        
+        # 检查必需的配置项
+        local required_vars=("DIFY_API_KEY" "DIFY_KNOWLEDGE_BASE_ID" "DIFY_API_BASE_URL")
+        local missing_vars=0
+        
+        for var in "${required_vars[@]}"; do
+            if grep -q "^$var=" "$INSTALL_DIR/.env"; then
+                log_info "  ✅ $var 已配置"
+            else
+                log_warning "  ⚠️ $var 未配置"
+                ((missing_vars++))
+            fi
+        done
+        
+        if [ $missing_vars -gt 0 ]; then
+            log_warning "需要配置 $missing_vars 个必需的环境变量"
+        fi
     else
         log_error "配置文件不存在"
+        ((verification_issues++))
     fi
     
-    # 检查服务
-    if systemctl is-enabled tke-dify-sync &>/dev/null; then
-        log_success "系统服务已启用"
+    # 检查多知识库配置
+    local multi_kb_configs=$(find "$INSTALL_DIR" -name ".env.*" -not -name "*.example" -not -name "*.template" | wc -l)
+    if [ $multi_kb_configs -gt 0 ]; then
+        log_success "发现 $multi_kb_configs 个多知识库配置文件"
+    fi
+    
+    # 验证 cron 作业配置
+    log_info "验证 cron 作业配置..."
+    if validate_cron_configuration; then
+        log_success "cron 作业配置验证通过"
     else
-        log_warning "系统服务未启用"
+        log_warning "cron 作业配置存在问题"
+        ((verification_issues++))
     fi
     
-    log_success "安装验证完成"
+    # 检查 cron 服务状态
+    if systemctl is-active --quiet cron 2>/dev/null || systemctl is-active --quiet crond 2>/dev/null; then
+        log_success "cron 服务正在运行"
+    else
+        log_error "cron 服务未运行"
+        ((verification_issues++))
+    fi
+    
+    # 检查关键脚本
+    local scripts=("monitor.sh" "health_check.sh" "start.sh")
+    for script in "${scripts[@]}"; do
+        if [ -f "$INSTALL_DIR/scripts/$script" ]; then
+            log_success "脚本存在: $script"
+        else
+            log_warning "脚本缺失: $script"
+        fi
+    done
+    
+    # 检查日志目录
+    if [ -d "$INSTALL_DIR/logs" ] && [ -w "$INSTALL_DIR/logs" ]; then
+        log_success "日志目录可写"
+    else
+        log_error "日志目录不存在或不可写"
+        ((verification_issues++))
+    fi
+    
+    # 检查数据目录
+    if [ -d "$INSTALL_DIR/data" ] && [ -w "$INSTALL_DIR/data" ]; then
+        log_success "数据目录可写"
+    else
+        log_warning "数据目录不存在或不可写"
+    fi
+    
+    # 运行快速语法检查
+    if python -m py_compile tke_dify_sync.py 2>/dev/null; then
+        log_success "主脚本语法检查通过"
+    else
+        log_error "主脚本语法检查失败"
+        ((verification_issues++))
+    fi
+    
+    # 总结验证结果
+    if [ $verification_issues -eq 0 ]; then
+        log_success "✅ 安装验证完全通过！系统已准备就绪"
+    else
+        log_warning "⚠️ 安装验证发现 $verification_issues 个问题，请查看上述输出"
+    fi
+    
+    return $verification_issues
 }
 
 # 显示部署信息
 show_deployment_info() {
     echo
     echo "🎉 TKE 文档同步系统部署完成！"
+    echo "=================================="
     echo
     echo "📁 安装目录: $INSTALL_DIR"
-    echo "📝 配置文件: $INSTALL_DIR/.env"
+    echo "📝 主配置文件: $INSTALL_DIR/.env"
     echo "📊 日志目录: $INSTALL_DIR/logs"
+    echo "📦 数据目录: $INSTALL_DIR/data"
+    echo "🔧 脚本目录: $INSTALL_DIR/scripts"
     echo
-    echo "🔧 下一步操作："
-    echo "1. 编辑配置文件："
+    
+    # 显示多知识库配置（如果存在）
+    local multi_kb_configs=$(find "$INSTALL_DIR" -name ".env.*" -not -name "*.example" -not -name "*.template" 2>/dev/null)
+    if [ -n "$multi_kb_configs" ]; then
+        echo "📚 多知识库配置文件:"
+        echo "$multi_kb_configs" | while read -r config; do
+            echo "   $(basename "$config")"
+        done
+        echo
+    fi
+    
+    echo "🕐 已配置的 cron 作业:"
+    if crontab -l 2>/dev/null | grep -q "tke_dify_sync\|tke-dify"; then
+        crontab -l 2>/dev/null | grep "tke_dify_sync\|tke-dify" | while read -r job; do
+            echo "   📋 $job"
+        done
+    else
+        echo "   ⚠️ 未发现 cron 作业，可能需要手动配置"
+    fi
+    echo
+    
+    echo "🔧 必需的下一步操作："
+    echo "1. 📝 编辑配置文件，设置 API 密钥和知识库 ID："
     echo "   nano $INSTALL_DIR/.env"
     echo
-    echo "2. 配置 Dify API Key 和知识库 ID"
+    echo "2. 🔑 配置必需的环境变量："
+    echo "   - DIFY_API_KEY=your-dify-api-key"
+    echo "   - DIFY_KNOWLEDGE_BASE_ID=your-knowledge-base-id"
+    echo "   - DIFY_API_BASE_URL=your-dify-api-url"
     echo
-    echo "3. 测试配置："
-    echo "   cd $INSTALL_DIR && python test_config.py"
+    echo "3. ✅ 验证配置："
+    echo "   cd $INSTALL_DIR && ./scripts/validate_cron_setup.sh"
     echo
-    echo "4. 启动服务："
-    echo "   sudo systemctl start tke-dify-sync"
+    echo "4. 🧪 手动测试运行："
+    echo "   cd $INSTALL_DIR && ./scripts/start.sh"
     echo
-    echo "5. 查看服务状态："
-    echo "   sudo systemctl status tke-dify-sync"
+    echo "5. 📊 运行健康检查："
+    echo "   cd $INSTALL_DIR && ./scripts/health_check.sh"
     echo
-    echo "6. 查看日志："
-    echo "   tail -f $INSTALL_DIR/logs/tke_sync.log"
+    echo "🔍 验证和监控命令："
+    echo "• 查看 cron 作业状态: crontab -l | grep tke"
+    echo "• 查看实时日志: tail -f $INSTALL_DIR/logs/cron*.log"
+    echo "• 检查系统状态: $INSTALL_DIR/scripts/monitor.sh"
+    echo "• 分析部署状态: $INSTALL_DIR/scripts/analyze_deployment.sh"
+    echo "• 运行完整测试: $INSTALL_DIR/scripts/run_all_tests.sh"
     echo
-    echo "📚 更多信息请查看 DEPLOYMENT_GUIDE.md"
+    
+    # 显示多知识库特定说明
+    if [ -n "$multi_kb_configs" ]; then
+        echo "📚 多知识库配置说明："
+        echo "• 每个 .env.* 文件对应一个知识库"
+        echo "• cron 作业会自动切换配置文件"
+        echo "• 查看多知识库调度: $INSTALL_DIR/scripts/test_multi_kb_scheduling.sh"
+        echo
+    fi
+    
+    echo "🚨 重要提醒："
+    echo "• 本系统使用 cron 调度，不是 systemd 守护进程"
+    echo "• 如果之前使用过 systemd 版本，请运行迁移工具："
+    echo "  $INSTALL_DIR/scripts/migrate_to_cron.sh"
+    echo "• 定期运行健康检查确保系统正常运行"
+    echo
+    echo "📚 详细文档和故障排除："
+    echo "• 部署指南: $INSTALL_DIR/DEPLOYMENT_GUIDE.md"
+    echo "• 使用文档: $INSTALL_DIR/DOCS_GUIDE.md"
+    echo "• 在线支持: https://github.com/your-repo/issues"
+    echo
+    echo "🎯 快速验证部署是否成功："
+    echo "   cd $INSTALL_DIR && ./scripts/run_all_tests.sh -f"
 }
 
 # 主函数
@@ -531,13 +896,28 @@ main() {
     setup_python_environment
     create_config_files
     create_scripts
-    create_systemd_service
+    generate_cron_templates
     set_permissions
     setup_cron_jobs
-    verify_installation
-    show_deployment_info
+    setup_enhanced_logging
     
-    log_success "部署完成！"
+    # 验证安装并根据结果显示不同信息
+    if verify_installation; then
+        show_deployment_info
+        log_success "🎉 部署完成！系统已准备就绪"
+        echo
+        echo "✅ 所有验证检查通过，可以开始使用系统"
+        echo "💡 建议运行快速测试确认一切正常: cd $INSTALL_DIR && ./scripts/run_all_tests.sh -f"
+    else
+        show_deployment_info
+        log_warning "⚠️ 部署完成但发现一些问题"
+        echo
+        echo "🔧 请按照上述说明完成配置，然后运行验证："
+        echo "   cd $INSTALL_DIR && ./scripts/validate_cron_setup.sh"
+        echo
+        echo "📞 如需帮助，请查看故障排除文档或运行诊断工具："
+        echo "   cd $INSTALL_DIR && ./scripts/analyze_deployment.sh"
+    fi
 }
 
 # 错误处理

@@ -15,10 +15,11 @@ from urllib.parse import urljoin
 from typing import Set, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-from enhanced_metadata_generator import EnhancedMetadataGenerator
+from enhanced_metadata_generator import MetadataGenerator
 from dify_sync_manager import DifySyncManager, KnowledgeBaseStrategy
 from tke_logger import setup_logger, get_logger, LogLevel
 from secure_temp_manager import setup_temp_manager, get_temp_manager
+from markdown_content_extractor import MarkdownContentExtractor
 
 
 class ConfigurationError(Exception):
@@ -472,6 +473,9 @@ class ContentScraper:
         )
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
+        
+        # 初始化 Markdown 提取器
+        self.markdown_extractor = MarkdownContentExtractor(config.base_url)
     
     def scrape_content(self, url: str) -> Optional[str]:
         """
@@ -564,12 +568,14 @@ class ContentScraper:
             print(f"[内容抓取] HTML 解析失败: {url} - {e}")
             return None
         
-        # 提取内容和标题
-        content = self._extract_content(soup, url)
+        # 提取内容和标题 - 使用 Markdown 格式提取
+        content = self.markdown_extractor.extract_markdown_content(soup, url)
+        format_type = "Markdown"
+        
         title = self._extract_title(soup, url)
         
         if content:
-            print(f"[内容抓取] 成功提取内容 ({len(content)} 字符): {url}")
+            print(f"[内容抓取] 成功提取{format_type}内容 ({len(content)} 字符): {url}")
             print(f"[标题提取] 提取标题: {title}")
             # 将标题和内容组合返回，使用特殊分隔符
             return f"TITLE:{title}\nCONTENT:{content}"
@@ -1031,7 +1037,7 @@ class TKEDifySync:
     def __init__(self, config: Config):
         self.config = config
         self.dify_manager = DifySyncManager(config)
-        self.metadata_generator = EnhancedMetadataGenerator()
+        self.metadata_generator = MetadataGenerator()
     
     def sync_to_dify(self, url: str, content: str, metadata: Dict = None) -> bool:
         """
@@ -1236,7 +1242,7 @@ def main():
         
         # 初始化元数据生成器
         logger.info("初始化元数据生成器...")
-        metadata_generator = EnhancedMetadataGenerator()
+        metadata_generator = MetadataGenerator()
         
         # 初始化 Dify 同步管理器
         logger.info("初始化 Dify 同步管理器...")

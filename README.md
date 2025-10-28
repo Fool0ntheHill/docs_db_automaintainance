@@ -6,36 +6,45 @@
 
 - 🤖 **智能哈希对比** - 自动检测内容变更，跳过重复同步
 - 🚀 **全自动抓取** - 一键抓取所有 TKE 官方文档
-- 📊 **增强元数据** - 自动生成文档分类和标签
+- 📊 **智能元数据** - 自动生成文档分类（操作类/概述类）
 - 🔄 **智能重试** - 完整的错误处理和重试机制
 - 📈 **性能优化** - 减少50%的API调用，显著提升同步效率
 - 📝 **详细日志** - 完整的运行状态和统计信息
+- 🎨 **Markdown 格式** - 保持文档结构，支持标题、列表、链接、代码块等
 
-## 🚀 快速开始
+## 📚 文档导航
 
-### 1. 安装依赖
+> � **不知道看哪个文档？** 查看 [DOCS_GUIDE.md](DOCS_GUIDE.md) - 文档使用指南
+
+### 🚀 快速开始
+- **本地开发**: [QUICK_START.md](QUICK_START.md) - 5分钟快速上手
+- **服务器部署**: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - 完整部署指南
+
+### 📖 详细文档
+- **用户指南**: [USER_GUIDE.md](USER_GUIDE.md) - 详细使用说明和高级配置
+- **Git 管理**: [GIT_SETUP.md](GIT_SETUP.md) - 代码管理和维护指南
+
+## ⚡ 5分钟快速开始
+
+### 1. 克隆项目
+```bash
+git clone https://github.com/Fool0ntheHill/docs_db_automaintainance.git
+cd docs_db_automaintainance
+```
+
+### 2. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置系统
-创建 `.env` 文件（**唯一需要配置的文件**）：
+### 3. 配置系统
+创建 `.env` 文件：
 
 ```bash
-# === 必填配置 ===
-DIFY_API_KEY=your_dify_api_key_here
-DIFY_KNOWLEDGE_BASE_ID=your_knowledge_base_id_here
-DIFY_API_BASE_URL=https://api.dify.ai/v1
-
-# === 可选配置 ===
-KB_STRATEGY=primary
-REQUEST_TIMEOUT=30
-RETRY_ATTEMPTS=3
-```
-
-### 3. 测试配置
-```bash
-python test_config.py
+# 必填配置 - 默认使用 tke_docs_base 知识库
+DIFY_API_KEY=dataset-m6r1gc2q4BKVKPKR0xy1KVPS
+DIFY_KNOWLEDGE_BASE_ID=781c5e51-c317-4861-823e-143f13ab69ce
+DIFY_API_BASE_URL=http://119.91.201.9/v1
 ```
 
 ### 4. 运行同步
@@ -43,11 +52,61 @@ python test_config.py
 python tke_dify_sync.py
 ```
 
-## 📋 配置说明
+## 🔧 多知识库配置
 
-### 获取 Dify 配置信息
+支持同时同步到多个知识库：
 
-**API Key 获取：**
+```bash
+# 方式一：手动切换配置
+cp .env.tke_docs_base .env && python tke_dify_sync.py
+cp .env.tke_knowledge_base .env && python tke_dify_sync.py
+
+# 方式二：批量同步脚本（推荐）
+./scripts/sync_all_kb.sh
+```
+
+## 📊 系统要求
+
+- Python 3.8+
+- Chrome/Chromium 浏览器
+- 2GB+ 内存
+- 稳定的网络连接
+
+## ⏰ 自动化调度
+
+### 生产环境部署（推荐）
+
+使用 cron 进行定时调度，避免资源浪费：
+
+```bash
+# 一键部署到服务器
+curl -sSL https://raw.githubusercontent.com/your-repo/deploy.sh | bash
+
+# 或手动配置 cron 作业
+crontab -e
+# 添加：0 2 * * * cd /opt/tke-dify-sync && ./venv/bin/python tke_dify_sync.py >> logs/cron.log 2>&1
+```
+
+### 多知识库自动调度
+
+```bash
+# 配置多知识库定时同步
+0 2 * * * cd /opt/tke-dify-sync && cp .env.main .env && ./venv/bin/python tke_dify_sync.py >> logs/cron_main.log 2>&1
+0 3 * * * cd /opt/tke-dify-sync && cp .env.test .env && ./venv/bin/python tke_dify_sync.py >> logs/cron_test.log 2>&1
+```
+
+### 为什么使用 cron 而不是 systemd？
+
+- ✅ **资源效率**: 仅在需要时运行，不占用常驻内存
+- ✅ **稳定性**: 避免无限重启问题
+- ✅ **简单性**: 配置和维护更简单
+- ✅ **灵活性**: 支持复杂的多知识库调度
+
+## 🆘 获取帮助
+
+- 🐛 **问题反馈**: 创建 GitHub Issue
+- 📖 **详细文档**: 查看 `docs/` 目录
+- 💬 **使用交流**: 查看项目 Wiki
 1. 登录 Dify 控制台
 2. 进入"设置" → "API Keys"
 3. 创建新的 API Key

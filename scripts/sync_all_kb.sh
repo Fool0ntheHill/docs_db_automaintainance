@@ -21,14 +21,14 @@ fi
 
 # 定义配置文件列表
 CONFIG_FILES=(
-    ".env.production"
-    ".env.testing"
+    ".env.tke_docs_base"
+    ".env.tke_knowledge_base"
 )
 
 # 定义配置文件描述
 declare -A CONFIG_DESCRIPTIONS
-CONFIG_DESCRIPTIONS[".env.production"]="生产环境知识库"
-CONFIG_DESCRIPTIONS[".env.testing"]="测试环境知识库"
+CONFIG_DESCRIPTIONS[".env.tke_docs_base"]="TKE基础文档库"
+CONFIG_DESCRIPTIONS[".env.tke_knowledge_base"]="TKE知识库"
 
 # 备份当前配置文件
 if [ -f ".env" ]; then

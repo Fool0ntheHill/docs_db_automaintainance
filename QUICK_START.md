@@ -1,24 +1,34 @@
-# TKE 文档智能同步系统 - 快速开始
+# 快速开始 - 本地开发
 
-## 🎯 系统简介
+> 适用于：本地开发、测试环境、个人使用
 
-这是一个智能的 TKE 文档同步系统，具备：
-- ✅ 智能哈希对比，自动跳过重复内容
-- ✅ 全自动抓取 TKE 官方文档
-- ✅ 一键同步到 Dify 知识库
-- ✅ 减少50%的API调用，显著提升效率
+## ⚡ 5分钟快速上手
 
-## 🚀 三步开始使用
+### 前置要求
+- Python 3.8+
+- Chrome 浏览器
+- Git
 
-### 步骤 1: 配置 `.env` 文件
-
-创建 `.env` 文件，填入以下内容：
+### 步骤 1: 获取代码
 
 ```bash
-# 必填配置
-DIFY_API_KEY=your_dify_api_key_here
-DIFY_KNOWLEDGE_BASE_ID=your_knowledge_base_id_here
-DIFY_API_BASE_URL=https://api.dify.ai/v1
+# 克隆项目
+git clone https://github.com/Fool0ntheHill/docs_db_automaintainance.git
+cd docs_db_automaintainance
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+### 步骤 2: 配置系统
+
+创建 `.env` 文件：
+
+```bash
+# 必填配置 - 默认使用 tke_docs_base 知识库
+DIFY_API_KEY=dataset-m6r1gc2q4BKVKPKR0xy1KVPS
+DIFY_KNOWLEDGE_BASE_ID=781c5e51-c317-4861-823e-143f13ab69ce
+DIFY_API_BASE_URL=http://119.91.201.9/v1
 
 # 可选配置
 KB_STRATEGY=primary
@@ -26,11 +36,7 @@ REQUEST_TIMEOUT=30
 RETRY_ATTEMPTS=3
 ```
 
-**获取配置信息：**
-- **API Key**: Dify 控制台 → 设置 → API Keys
-- **知识库 ID**: 知识库页面 URL 中的 ID（如：`8c6b8e3c-f69c-48ea-b34e-a71798c800ed`）
-
-### 步骤 2: 测试配置
+### 步骤 3: 测试配置
 
 ```bash
 python test_config.py
@@ -40,13 +46,43 @@ python test_config.py
 ```
 ✅ 配置验证成功！
 📊 配置信息：
-  • API 地址: https://api.dify.ai/v1
+  • API 地址: http://119.91.201.9/v1
   • 知识库数量: 1
-  • 知识库 ID: 8c6b8e3c-f69c-48ea-b34e-a71798c800ed
+  • 知识库 ID: 781c5e51-c317-4861-823e-143f13ab69ce
 🎯 配置正确，可以开始使用！
 ```
 
-### 步骤 3: 运行同步
+### 步骤 4: 运行同步
+
+```bash
+python tke_dify_sync.py
+```
+
+## 🔄 多知识库使用
+
+系统已配置两个知识库：
+
+### 知识库 1: tke_docs_base
+```bash
+# 使用 tke_docs_base 知识库
+cp .env.tke_docs_base .env
+python tke_dify_sync.py
+```
+
+### 知识库 2: tke_knowledge_base
+```bash
+# 使用 tke_knowledge_base 知识库
+cp .env.tke_knowledge_base .env
+python tke_dify_sync.py
+```
+
+### 批量同步（推荐）
+```bash
+# 同时同步到两个知识库
+./scripts/sync_all_kb.sh
+```
+
+## 📊 运行结果
 
 ```bash
 python tke_dify_sync.py
