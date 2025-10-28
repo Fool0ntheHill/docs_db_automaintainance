@@ -1,0 +1,5 @@
+# 默认自动处理所有文本文件
+* text=auto
+
+# 强制 Shell 脚本必须使用 LF 换行符
+*.sh  text eol=lf
