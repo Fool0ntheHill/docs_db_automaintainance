@@ -44,7 +44,7 @@ class MetadataGenerator:
         # 必需的三个元数据字段
         metadata['url'] = url
         metadata['content_hash'] = hashlib.md5(content.encode('utf-8')).hexdigest()
-        metadata['document_type'] = self._classify_document(url, content)
+        metadata['document_type'] = self._determine_document_type(url, content)
         
         return metadata
     

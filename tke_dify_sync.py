@@ -376,6 +376,11 @@ def get_all_doc_urls(start_url: str, base_url: str = "https://cloud.tencent.com"
     """
     print("[任务 1] 正在启动 Selenium (有头模式)...")
     options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
 
@@ -1218,9 +1223,14 @@ def main():
     logger.log_task_start("TKE 文档同步", version="2.0")
     
     try:
+        # 支持命令行参数指定环境文件
+        import sys
+        env_file = sys.argv[1] if len(sys.argv) > 1 else ".env"
+        logger.info(f"使用环境文件: {env_file}")
+        
         # 初始化配置管理器
         logger.info("初始化配置管理器...")
-        config_manager = ConfigManager()
+        config_manager = ConfigManager(env_file)
         
         # 验证配置
         if not config_manager.validate_config():
@@ -1284,7 +1294,8 @@ def main():
             
             # 将内容添加到语料库（用于 TF-IDF 计算）
             if not corpus_built:
-                metadata_generator.add_document_to_corpus(content)
+                # metadata_generator.add_document_to_corpus(content)
+                pass
                 
             # 计算哈希并对比
             new_hash = get_content_hash(content)
@@ -1373,7 +1384,7 @@ def main():
         
         # 输出统计信息
         logger.info("输出统计信息...")
-        content_scraper.print_stats()
+        # content_scraper.print_stats()
         dify_sync_manager.print_stats()
         state_manager.print_stats()
         temp_manager.print_stats()

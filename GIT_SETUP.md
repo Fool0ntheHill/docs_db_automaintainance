@@ -129,7 +129,7 @@ git push -u origin main
 ├── 
 ├── # 文档
 ├── DEPLOYMENT_GUIDE.md              # 完整部署指南
-├── QUICK_START_CVM.md              # 快速开始指南
+├── QUICK_START.md                  # 快速开始指南
 ├── CVM_DEPLOYMENT_SUMMARY.md       # 部署总结
 ├── GIT_SETUP.md                    # 本文档
 ├── 

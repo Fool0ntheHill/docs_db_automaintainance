@@ -318,10 +318,13 @@ class DifySyncManager:
             print(f"[Dify] 使用本地完整配置: {kb_id}")
             return config
         
-        # 如果本地没有配置，使用默认配置
+        # 尝试从知识库信息中获取实际的 doc_form
+        detected_doc_form = self._detect_kb_doc_form(kb_id)
+        
+        # 如果本地没有配置，使用默认配置（但使用检测到的 doc_form）
         default_config = self.kb_configs.get("default_config", {
             "indexing_technique": "high_quality",
-            "doc_form": "text_model",
+            "doc_form": detected_doc_form or "text_model",
             "doc_language": "中文",
             "process_rule": {"mode": "automatic"},
             "retrieval_model": {
@@ -332,9 +335,58 @@ class DifySyncManager:
             }
         })
         
+        # 确保使用检测到的 doc_form
+        if detected_doc_form:
+            default_config["doc_form"] = detected_doc_form
+            print(f"[Dify] 使用检测到的文档格式: {detected_doc_form}")
+        
         print(f"[Dify] 使用默认完整配置: {kb_id}")
         return default_config
     
+    def _detect_kb_doc_form(self, kb_id: str) -> Optional[str]:
+        """
+        检测知识库的文档格式
+        
+        Args:
+            kb_id: 知识库 ID
+            
+        Returns:
+            检测到的文档格式，如果检测失败返回 None
+        """
+        try:
+            # 方法1: 从知识库基本信息中获取
+            kb_info = self.get_knowledge_base_info(kb_id, force_refresh=True)
+            # 注意：KnowledgeBaseInfo 类中没有 doc_form 字段，需要从原始响应获取
+            
+            # 方法2: 从现有文档中推断
+            response = self._make_api_request("GET", "documents", kb_id, params={'limit': 1})
+            docs_data = response.json()
+            documents = docs_data.get('data', [])
+            
+            if documents:
+                doc_form = documents[0].get('doc_form')
+                if doc_form:
+                    print(f"[Dify] 从现有文档检测到格式: {doc_form}")
+                    return doc_form
+            
+            # 方法3: 尝试从知识库详细信息API获取
+            try:
+                response = self._make_api_request("GET", "", kb_id)
+                kb_data = response.json()
+                doc_form = kb_data.get('doc_form')
+                if doc_form:
+                    print(f"[Dify] 从知识库信息检测到格式: {doc_form}")
+                    return doc_form
+            except:
+                pass
+            
+            print(f"[Dify] 无法检测知识库 {kb_id} 的文档格式，将使用默认值")
+            return None
+            
+        except Exception as e:
+            print(f"[Dify] 检测文档格式时出错 {kb_id}: {e}")
+            return None
+
     def check_knowledge_base_availability(self, kb_id: str) -> bool:
         """
         检查知识库可用性
@@ -477,7 +529,7 @@ class DifySyncManager:
                         # 将元数据列表转换为字典
                         metadata_dict = {}
                         for item in doc_metadata_list:
-                            if item.get('name'):
+                            if isinstance(item, dict) and item.get('name'):
                                 metadata_dict[item['name']] = item.get('value')
                         
                         if metadata_dict.get('url') == url:
@@ -602,13 +654,17 @@ class DifySyncManager:
         try:
             # 获取知识库完整配置
             kb_config = self._get_kb_full_config(kb_id)
+            doc_form = kb_config.get('doc_form', 'text_model')
+            
+            # 根据文档格式调整内容
+            formatted_content = self._format_content_for_doc_form(content, doc_form, name)
             
             # 准备请求数据
             data = {
                 'name': name,
-                'text': content,
+                'text': formatted_content,
                 'indexing_technique': kb_config.get('indexing_technique', 'high_quality'),
-                'doc_form': kb_config.get('doc_form', 'text_model'),
+                'doc_form': doc_form,
                 'doc_language': kb_config.get('doc_language', '中文'),
                 'process_rule': kb_config.get('process_rule', {'mode': 'automatic'})
             }
@@ -621,7 +677,17 @@ class DifySyncManager:
             response = self._make_api_request("POST", "document/create_by_text", kb_id, json=data)
             
             result = response.json()
-            document_id = result.get('document', {}).get('id')
+            # 处理不同的响应格式
+            document_field = result.get('document')
+            if isinstance(document_field, dict):
+                # 如果 document 是字典，从中获取 id
+                document_id = document_field.get('id')
+            elif isinstance(document_field, (str, int)):
+                # 如果 document 直接是 ID（字符串或整数）
+                document_id = str(document_field)
+            else:
+                # 尝试从根级别获取 document_id
+                document_id = result.get('document_id') or result.get('id')
             
             if document_id:
                 print(f"[Dify] 文档创建成功: {name} -> {document_id}")
@@ -718,7 +784,8 @@ class DifySyncManager:
             field_mapping = {}
             doc_metadata = result.get('doc_metadata', [])
             for field in doc_metadata:
-                field_mapping[field['name']] = field['id']
+                if isinstance(field, dict) and 'name' in field and 'id' in field:
+                    field_mapping[field['name']] = field['id']
             
             return field_mapping
             
@@ -745,7 +812,7 @@ class DifySyncManager:
             doc_metadata_list = doc_details.get('doc_metadata', [])
             if doc_metadata_list:
                 for item in doc_metadata_list:
-                    if item.get('name') == 'content_hash':
+                    if isinstance(item, dict) and item.get('name') == 'content_hash':
                         hash_value = item.get('value')
                         if hash_value:
                             print(f"[Dify] 获取到现有文档哈希: {hash_value}")
@@ -757,6 +824,33 @@ class DifySyncManager:
         except DifyAPIError as e:
             print(f"[Dify] 获取文档哈希失败 {document_id}: {e}")
             return None
+
+    def _format_content_for_doc_form(self, content: str, doc_form: str, title: str) -> str:
+        """
+        根据文档格式调整内容
+        
+        Args:
+            content: 原始内容
+            doc_form: 文档格式 (text_model, qa_model, hierarchical_model)
+            title: 文档标题
+            
+        Returns:
+            格式化后的内容
+        """
+        if doc_form == 'qa_model':
+            # QA 模式需要问答格式
+            # 将内容转换为问答格式
+            qa_content = f"问题: {title}\n\n答案: {content}"
+            print(f"[Dify] 内容已转换为QA格式")
+            return qa_content
+        elif doc_form == 'hierarchical_model':
+            # 分层模式保持原有的层次结构
+            print(f"[Dify] 使用分层模式，保持原有结构")
+            return content
+        else:
+            # text_model 使用原始内容
+            print(f"[Dify] 使用文本模式，保持原有内容")
+            return content
 
     def _normalize_doc_type(self, doc_type: str) -> str:
         """
@@ -835,12 +929,16 @@ class DifySyncManager:
         try:
             # 获取知识库完整配置
             kb_config = self._get_kb_full_config(kb_id)
+            doc_form = kb_config.get('doc_form', 'text_model')
+            
+            # 根据文档格式调整内容
+            formatted_content = self._format_content_for_doc_form(content, doc_form, name)
             
             # 准备请求数据
             data = {
                 'name': name,
-                'text': content,
-                'doc_form': kb_config.get('doc_form', 'text_model'),
+                'text': formatted_content,
+                'doc_form': doc_form,
                 'doc_language': kb_config.get('doc_language', '中文'),
                 'process_rule': kb_config.get('process_rule', {'mode': 'automatic'})
             }
